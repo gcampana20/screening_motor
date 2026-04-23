@@ -1,0 +1,82 @@
+---
+description: Reglas del motor de screening Complif — cargar siempre que se toque SQL, migraciones o tests.
+globs:
+  - "migrations/**/*.sql"
+  - "seeds/**/*.sql"
+  - "SQL Tables/**/*.sql"
+  - "SQL Functions/**/*.sql"
+  - "SQL Views/**/*.sql"
+  - "docker/**"
+  - "docker-compose.yml"
+alwaysApply: false
+---
+
+# Complif — reglas del repo para Cursor
+
+> Ver `AGENTS.md` en la raíz para la versión extendida con playbooks y
+> ejemplos. Este archivo es el subset accionable para sesiones de Cursor.
+
+## Stack
+- PostgreSQL 17 en docker-compose.
+- Extensiones habilitadas: `pg_trgm`, `fuzzystrmatch`, `unaccent`, `uuid-ossp`.
+- Multi-tenant via RLS (`current_tenant_id()` → `app.tenant_id` setting).
+
+## Antes de modificar código
+1. Leer `README.md` sección "Decisiones de diseño" si tocás `calculate_similarity`,
+   `validate_tax_id`, `run_screening`, o las policies RLS.
+2. Si vas a crear una migración, consultá `ls migrations/V*.sql | sort -V | tail -1`
+   para saber el próximo número. Numeración estricta, no saltes.
+3. Antes de tocar una función que ya está en uso (`calculate_similarity`,
+   `run_screening`), grep de los callers para ver el impacto.
+
+## Reglas duras para migraciones
+- Formato: `V<NNN>__<snake_case>.sql`.
+- Siempre envolver en `BEGIN ... COMMIT`.
+- Siempre idempotente: `DROP IF EXISTS` + `CREATE OR REPLACE`, o `IF NOT EXISTS`,
+  o `DO` blocks con check previo.
+- Header comment explicando el **por qué** (no el qué).
+- Cada migración con su test en `migrations/tests/test_V<NNN>__<name>.sql`.
+- Tests envueltos en `BEGIN ... ROLLBACK` (no dejar residuo).
+- **No editar migraciones aplicadas.** Fixes van en una migración nueva.
+
+## Reglas duras para funciones PL/pgSQL
+- Params: prefijo `p_`.
+- Variables locales: prefijo `v_`.
+- Si la función hace INSERT/UPDATE en tablas sensibles (`alert`,
+  `screening_run_log`): `SECURITY DEFINER` + `SET search_path = pg_catalog, public`.
+- Funciones puras/read-only: `SECURITY INVOKER` (default).
+- Si cambia la signature: `DROP FUNCTION IF EXISTS` con la signature vieja
+  explícita **antes** de `CREATE`.
+
+## Dominio — cosas que rompen si las ignorás
+- `country` (residencia, para validar tax_id) ≠ `nationality` (ciudadanía,
+  para EDD). No mezclar en lógica de screening.
+- `screening_list_entry` **no tiene** `tenant_id` — hereda vía `list`.
+- `alert.detail` es **jsonb** (post V010). Nunca insertar texto plano ahí.
+- Peso del tax_id en similarity: 0 si placeholder/secuencial/roto, 0.15 si
+  invalid_checksum sin placeholder, 0.30 si VALID o UNKNOWN_COUNTRY.
+- En `calculate_similarity`, cada tax_id se valida con su **propio país**
+  (`p_country1` para entity, `p_country2` para entry). No un solo país
+  compartido.
+
+## Patrones gotcha conocidos
+- **`array || 'string'` dentro de `to_jsonb()`** → Postgres trata el string
+  como array literal y falla con "literal de array mal formado". Usar
+  `array_append(array, 'string')`.
+- **`ALTER COLUMN TYPE` no es idempotente** si el tipo destino ya aplica.
+  Envolver en `DO` con check de `information_schema.columns.data_type`.
+- **Type coercion en CTE vs RETURN QUERY** — si la CTE propaga una columna
+  varchar pero `RETURNS TABLE` declara text, cast explícito con `::text`.
+
+## Verificar cambios
+```bash
+docker compose exec db psql -U complif_admin -d complif \
+    -f /repo/migrations/V###__tu_cambio.sql
+docker compose exec db psql -U complif_admin -d complif \
+    -f /repo/migrations/tests/test_V###__tu_cambio.sql
+```
+
+## Cuando tengas dudas
+Preguntá. No alucines sobre el schema — lee los archivos fuente
+(`SQL Tables/`, `migrations/V###*.sql`) o querea `information_schema` /
+`pg_catalog` vía el MCP Postgres configurado en `.mcp.json`.

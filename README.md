@@ -334,8 +334,32 @@ activarlas:
 
 ## Setup de desarrollo asistido por IA
 
-*(Se completa en el siguiente bloque — ver `AGENTS.md` y `.cursor/rules/`
-para las reglas que usamos con Claude/Cursor en este repo.)*
+Este repo está preparado para trabajar con agentes (Claude Code, Cursor,
+Copilot Workspace, etc.) como primera-clase. Tres archivos materializan eso:
+
+- **`AGENTS.md`** (raíz) — fuente canónica de convenciones, playbooks y
+  gotchas del dominio. Cualquier agente que abra el repo debería cargarlo
+  primero. Incluye: principios de trabajo, naming, hot path mental,
+  conceptos de compliance, weighting de similarity, cómo agregar una nueva
+  jurisdicción, cómo escribir una nueva migración, qué NO hacer, y cómo
+  verificar cambios.
+
+- **`.cursor/rules/complif.mdc`** — versión accionable para Cursor con
+  auto-load en files de `migrations/`, `seeds/`, `SQL *`, `docker/`.
+  Formato MDC (front-matter + markdown); Cursor lo aplica automáticamente
+  cuando el contexto matchea los globs. Referencia `AGENTS.md` para
+  detalles largos.
+
+- **`.mcp.example.json`** — config de MCP Postgres server. Renombrar a
+  `.mcp.json` para activarlo en Claude Code / Claude Desktop. Permite que
+  el agente queree la DB durante desarrollo (tablas, funciones, data).
+  Recomendación: crear un rol `complif_readonly` y usarlo en vez del admin.
+
+**Por qué este setup:** los repos productivos de AI-assisted development
+comparten un patrón — un único "agents manifest" que el humano mantiene,
+y wrappers por herramienta (Cursor, Claude, etc.) que referencian ese
+manifest en vez de duplicarlo. Si cambia una convención, se edita en un
+solo lugar.
 
 ---
 
