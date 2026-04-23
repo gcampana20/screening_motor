@@ -1,0 +1,63 @@
+# =============================================================================
+# docker-compose.yml
+# -----------------------------------------------------------------------------
+# Motor de screening de Complif — entorno de desarrollo local.
+#
+# Levanta Postgres 17 con las extensiones requeridas (pg_trgm, fuzzystrmatch,
+# unaccent, uuid-ossp vienen en el contrib package, incluido por default en
+# la imagen oficial).
+#
+# Orden de inicialización (docker-entrypoint-initdb.d corre en orden
+# alfabético; usamos un único script bash que hace todo en secuencia para
+# tener control explícito del orden de dependencia):
+#
+#   1. V000 (extensiones)     — habilita pg_trgm, fuzzystrmatch, etc.
+#   2. Baseline DDL           — tablas, funciones, triggers, views originales.
+#   3. V001-V010 (migrations) — schema evolution aplicado en orden.
+#   4. Seeds                  — datos de ejemplo para demo.
+#
+# Uso:
+#   docker compose up -d          # levanta la DB
+#   docker compose logs -f db     # ver progreso del init
+#   docker compose exec db psql -U complif_admin -d complif
+#   docker compose down -v        # baja y borra el volumen (reset clean)
+# =============================================================================
+
+services:
+  db:
+    image: postgres:17
+    container_name: complif-db
+    environment:
+      POSTGRES_DB: complif
+      POSTGRES_USER: complif_admin
+      POSTGRES_PASSWORD: complif_dev_insecure
+      # Fuerza timezone consistente (alerts aging, log timestamps).
+      TZ: America/Argentina/Buenos_Aires
+      PGTZ: America/Argentina/Buenos_Aires
+    ports:
+      - "5432:5432"
+    volumes:
+      # Persistencia de datos (named volume gestionado por docker).
+      - complif_pg_data:/var/lib/postgresql/data
+      # Bind mounts read-only de los archivos del repo. El init los consume
+      # desde estas rutas dentro del container.
+      - ./SQL Tables:/repo/baseline/tables:ro
+      - ./SQL Functions:/repo/baseline/functions:ro
+      - ./SQL Views:/repo/baseline/views:ro
+      - ./trigger alert_status_history.sql:/repo/baseline/trigger_alert_status_history.sql:ro
+      - ./migrations:/repo/migrations:ro
+      - ./seeds:/repo/seeds:ro
+      # Script de init: postgres corre TODO lo que esté en esta carpeta
+      # (.sh y .sql) en orden alfabético al primer boot.
+      - ./docker/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U complif_admin -d complif"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+volumes:
+  complif_pg_data:
+    name: complif_pg_data
