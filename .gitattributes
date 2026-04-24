@@ -1,0 +1,37 @@
+# =============================================================================
+# .gitattributes
+# -----------------------------------------------------------------------------
+# Fuerza line endings LF para archivos que Linux/Docker necesita ejecutar o
+# parsear sin sorpresas, independiente del sistema operativo del que hace git
+# clone. Sin esto, Windows con core.autocrlf=true convierte a CRLF al
+# checkout y el container Postgres falla con "required file not found" al
+# tratar de ejecutar docker/init/01-init.sh (el shebang queda #!/bin/bash\r).
+#
+# Default: detectar texto automáticamente, sin normalizar.
+# =============================================================================
+
+* text=auto
+
+# Shell scripts — DEBEN ser LF o Linux no los ejecuta.
+*.sh text eol=lf
+
+# SQL — LF por consistencia (Postgres lee ambos, pero evita diffs sucios
+# cruzando plataformas).
+*.sql text eol=lf
+
+# YAML/Docker config — LF estándar.
+*.yml text eol=lf
+*.yaml text eol=lf
+Dockerfile text eol=lf
+
+# Markdown y docs — LF.
+*.md text eol=lf
+
+# Windows-specific — mantener CRLF.
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# Binarios — no tocar.
+*.png binary
+*.jpg binary
+*.pdf binary
