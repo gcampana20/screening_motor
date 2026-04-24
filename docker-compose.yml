@@ -35,7 +35,12 @@ services:
       TZ: America/Argentina/Buenos_Aires
       PGTZ: America/Argentina/Buenos_Aires
     ports:
-      - "5432:5432"
+      # host:container — mapeamos 5433 en el host a 5432 interno del container
+      # porque 5432 en el host suele estar ocupado por un Postgres local de
+      # Windows/macOS/Linux preinstalado. Usando 5433 evitamos el conflicto y
+      # quien quiera acceder desde afuera del container se conecta a
+      # localhost:5433. Dentro del container sigue escuchando en 5432 (default).
+      - "5433:5432"
     volumes:
       # Persistencia de datos (named volume gestionado por docker).
       - complif_pg_data:/var/lib/postgresql/data
