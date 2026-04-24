@@ -69,9 +69,14 @@ erDiagram
     TENANT ||--o{ ANALYST               : "employs"
     TENANT ||--o{ LIST                  : "owns (INTERNAL only)"
     TENANT ||--o{ ALERT                 : "scopes"
+    TENANT ||--o{ ACCOUNT               : "owns"
+    TENANT ||--o{ SCREENING_RUN_LOG     : "scopes"
 
     LIST_TYPE_CONFIG ||--o{ LIST        : "types + defaults"
     LIST ||--o{ SCREENING_LIST_ENTRY    : "contains"
+
+    PERSON  ||--o{ ACCOUNT              : "owns (XOR company)"
+    COMPANY ||--o{ ACCOUNT              : "owns (XOR person)"
 
     PERSON  ||--o{ ALERT                : "triggers"
     COMPANY ||--o{ ALERT                : "triggers"
@@ -87,6 +92,9 @@ erDiagram
 
 - `tenant` — raíz de aislamiento multi-tenant.
 - `person` / `company` — entidades a screenear del cliente.
+- `account` — cuentas/relaciones comerciales que el tenant abre para una
+  `person` o `company` (mutuamente exclusivas por check constraint). Es el
+  "punto de contacto" sobre el que se dispara screening (ej: onboarding).
 - `list` — catálogo de listas de riesgo. `tenant_id` NULL = lista global
   (SANCTIONS, PEP); no-NULL = lista privada del tenant (INTERNAL blacklist).
 - `list_type_config` — defaults de `default_min_similarity` por tipo de
@@ -101,6 +109,22 @@ erDiagram
 - `alert_status_history` — audit trail poblado por trigger.
 - `alert_comment` — notas del analista.
 - `screening_run_log` — registro de cada invocación batch/ongoing.
+
+### Vistas de reporting
+
+Las vistas no forman parte del ERD (son proyecciones derivadas, no
+entidades) pero sí son parte del contrato público del motor: lo que el
+frontend de compliance consulta para poblar dashboards. Todas respetan
+RLS transitivamente — consultan tablas con policies activas.
+
+| Vista                           | Propósito                                              | Origen   |
+|---------------------------------|--------------------------------------------------------|----------|
+| `vw_alert_aging`                | Alertas pendientes clasificadas por antigüedad (buckets 0-1d, 1-7d, 7-30d, >30d) para priorización diaria del equipo. | baseline |
+| `vw_pending_alerts_by_analyst`  | Workload actual de cada analista (alertas PENDING/REVIEWING asignadas), para balancear carga. | baseline |
+| `vw_analyst_productivity`       | Métrica de throughput por analista (alertas cerradas, tasa de confirmación vs dismissal). | baseline |
+| `vw_screening_metrics`          | KPIs globales por tenant: totales, pendientes, tasa de falsos positivos. | baseline |
+| `vw_screening_coverage`         | Cobertura: qué porcentaje de las entidades del tenant ya fue screeneada al menos una vez. | baseline |
+| `vw_entities_pending_screening` | Entidades que necesitan (re-)screening: nunca corridas o cuya última corrida es anterior al último cambio de las listas. Alimenta el loop de ongoing monitoring. | V007     |
 
 ### Componentes del motor
 
