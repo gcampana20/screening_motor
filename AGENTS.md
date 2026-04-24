@@ -185,7 +185,13 @@ Si cualquiera falla, el cambio no está done.
 
 - `README.md` — overview, quickstart, decisiones de diseño.
 - `.cursor/rules/complif.mdc` — versión Cursor-friendly de este archivo.
-- `.mcp.json` — config del MCP Postgres server para queryear la DB desde
-  el agente durante desarrollo.
+- `.mcp.example.json` — config template del MCP Postgres server para
+  queryear la DB desde el agente durante desarrollo (renombrar a
+  `.mcp.json` para activar; `.mcp.json` está gitignored por secrets).
+- `baseline/` — DDL inicial (tables, functions, triggers, views) que
+  existía pre-migraciones. Se corre en el init antes de V001+.
 - `migrations/` — schema evolution (V000-V010 al momento de escribir esto).
 - `migrations/tests/` — tests SQL por migración.
+- `docs/legacy/inserts/` — inserts originales del export inicial. Ya no
+  se corren; los reemplaza `seeds/seed_data.sql`. Se preservan como
+  referencia histórica.

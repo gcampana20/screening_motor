@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS public.alert
 	CONSTRAINT alert_owner_check CHECK (
         (person_id IS NOT NULL AND company_id IS NULL) OR
         (person_id IS NULL AND company_id IS NOT NULL)
-	)
+	),
 	CONSTRAINT alert_status_check CHECK (
 		status IN ('PENDING', 'REVIEWING', 'CONFIRMED', 'DISMISSED')
 	)

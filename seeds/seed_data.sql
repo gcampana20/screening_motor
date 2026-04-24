@@ -74,16 +74,28 @@ ON CONFLICT (id) DO NOTHING;
 -- -----------------------------------------------------------------------------
 -- 5. Listas de screening
 -- -----------------------------------------------------------------------------
+-- Prerequisito: list.type tiene FK a list_type_config (creada en V005). V005
+-- sembró SANCTIONS / PEP / INTERNAL_BLACKLIST / INTERNAL_WATCHLIST. Para que
+-- la demo cubra también ADVERSE_MEDIA (parte del dominio canónico de
+-- screening) lo agregamos acá, idempotente. ON CONFLICT en la PK (list_type).
+INSERT INTO public.list_type_config (list_type, default_min_similarity, description) VALUES
+    ('ADVERSE_MEDIA', 0.700,
+        'Cobertura en medios adversos (noticias negativas). Impacto reputacional; '
+        'umbral medio-bajo porque una match aunque imprecisa puede justificar EDD.')
+ON CONFLICT (list_type) DO NOTHING;
+
 -- Listas globales (tenant_id = NULL): visibles a todos los tenants via RLS.
 -- Listas tenant-scoped: solo visibles para ese tenant.
 INSERT INTO public.list (id, name, type, tenant_id) VALUES
     -- Globales
-    ('50000000-0000-0000-0000-000000000001', 'OFAC SDN',        'SANCTIONS',     NULL),
-    ('50000000-0000-0000-0000-000000000002', 'UN Consolidated', 'SANCTIONS',     NULL),
-    ('50000000-0000-0000-0000-000000000003', 'PEP Global',      'PEP',           NULL),
-    ('50000000-0000-0000-0000-000000000004', 'Adverse Media',   'ADVERSE_MEDIA', NULL),
-    -- Tenant-scoped (INTERNAL: una blacklist propia de cada compliance team)
-    ('50000000-0000-0000-0000-000000000005', 'Acme Internal Blacklist', 'INTERNAL',
+    ('50000000-0000-0000-0000-000000000001', 'OFAC SDN',        'SANCTIONS',          NULL),
+    ('50000000-0000-0000-0000-000000000002', 'UN Consolidated', 'SANCTIONS',          NULL),
+    ('50000000-0000-0000-0000-000000000003', 'PEP Global',      'PEP',                NULL),
+    ('50000000-0000-0000-0000-000000000004', 'Adverse Media',   'ADVERSE_MEDIA',      NULL),
+    -- Tenant-scoped (INTERNAL_BLACKLIST: blacklist propia de cada compliance team,
+    -- match BLOQUEA la operación. El tipo viene de V005, que también definió
+    -- INTERNAL_WATCHLIST para casos donde solo se quiere monitorear.)
+    ('50000000-0000-0000-0000-000000000005', 'Acme Internal Blacklist', 'INTERNAL_BLACKLIST',
      '10000000-0000-0000-0000-000000000001')
 ON CONFLICT (id) DO NOTHING;
 

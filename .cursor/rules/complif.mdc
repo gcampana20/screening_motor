@@ -3,9 +3,7 @@ description: Reglas del motor de screening Complif — cargar siempre que se toq
 globs:
   - "migrations/**/*.sql"
   - "seeds/**/*.sql"
-  - "SQL Tables/**/*.sql"
-  - "SQL Functions/**/*.sql"
-  - "SQL Views/**/*.sql"
+  - "baseline/**/*.sql"
   - "docker/**"
   - "docker-compose.yml"
 alwaysApply: false
@@ -78,5 +76,5 @@ docker compose exec db psql -U complif_admin -d complif \
 
 ## Cuando tengas dudas
 Preguntá. No alucines sobre el schema — lee los archivos fuente
-(`SQL Tables/`, `migrations/V###*.sql`) o querea `information_schema` /
+(`baseline/`, `migrations/V###*.sql`) o querea `information_schema` /
 `pg_catalog` vía el MCP Postgres configurado en `.mcp.json`.

@@ -1,0 +1,54 @@
+# =============================================================================
+# .gitignore — Complif Challenge
+# -----------------------------------------------------------------------------
+# Qué ignoramos y por qué:
+#
+# - Secrets / configs locales: .mcp.json, .env, *.secret — estos archivos
+#   tienden a contener credenciales reales. .mcp.example.json (commiteado)
+#   queda como template.
+# - Artefactos de Docker / Postgres: si corrés la DB en bind-mount local
+#   en vez del named volume, los datos quedan en pg_data/ — no quieren
+#   ir al repo (megas de binarios opacos).
+# - Basura de editores e IDEs.
+# - Caches de lenguajes / herramientas.
+# =============================================================================
+
+# --- Secrets y configs locales ---
+.mcp.json
+.env
+.env.local
+.env.*.local
+*.secret
+
+# --- Datos de Postgres si alguna vez montás bind local ---
+pg_data/
+postgres_data/
+*.pg_data/
+
+# --- IDEs / Editores ---
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# --- OS ---
+desktop.ini
+
+# --- Logs ---
+*.log
+logs/
+
+# --- Node (por si algún día agregás scripts JS/npm) ---
+node_modules/
+npm-debug.log*
+
+# --- Python (por si agregás scripts de análisis) ---
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.venv/
+venv/

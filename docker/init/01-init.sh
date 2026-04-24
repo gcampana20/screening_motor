@@ -19,10 +19,19 @@ set -euo pipefail
 
 PSQL="psql -v ON_ERROR_STOP=1 --quiet --no-psqlrc -U ${POSTGRES_USER} -d ${POSTGRES_DB}"
 
+# Los archivos de /repo/baseline/ fueron exportados desde pgAdmin y traen
+# líneas `ALTER TABLE ... OWNER to postgres;` (o `OWNER TO postgres`) al
+# final. Como este container corre como complif_admin y el rol "postgres"
+# no existe, psql aborta con ON_ERROR_STOP=1. En lugar de tocar los SQL
+# fuente, los preprocesamos in-flight: cualquier OWNER to postgres se
+# reemplaza por el owner real (POSTGRES_USER). sed es no-op si el archivo
+# no tiene la línea, así que da lo mismo usarlo para baseline, migrations
+# o seeds.
 run() {
     local f="$1"
     echo "  >> $f"
-    $PSQL -f "$f"
+    sed -E "s/OWNER[[:space:]]+(to|TO)[[:space:]]+postgres/OWNER TO ${POSTGRES_USER}/g" "$f" \
+        | $PSQL
 }
 
 # -----------------------------------------------------------------------------
@@ -39,33 +48,38 @@ run "/repo/migrations/V000__extensions.sql"
 echo "=== 2/4  Baseline DDL ==="
 
 echo "--- 2a. Tables ---"
-run "/repo/baseline/tables/tenant SQL.sql"
-run "/repo/baseline/tables/account SQL.sql"
-run "/repo/baseline/tables/analyst SQL.sql"
-run "/repo/baseline/tables/person SQL.sql"
-run "/repo/baseline/tables/company SQL.sql"
-run "/repo/baseline/tables/list SQL.sql"
-run "/repo/baseline/tables/screening_list_entry SQL.sql"
-run "/repo/baseline/tables/alert SQL.sql"
-run "/repo/baseline/tables/alert comment SQL.sql"
-run "/repo/baseline/tables/alert status history SQL.sql"
+# Orden por dependencia de FKs:
+#   tenant → person, company → account (FKs a person/company)
+#         → analyst
+#         → list → screening_list_entry
+#         → alert (FKs a todo lo anterior) → alert_comment, alert_status_history
+run "/repo/baseline/tables/tenant.sql"
+run "/repo/baseline/tables/person.sql"
+run "/repo/baseline/tables/company.sql"
+run "/repo/baseline/tables/account.sql"
+run "/repo/baseline/tables/analyst.sql"
+run "/repo/baseline/tables/list.sql"
+run "/repo/baseline/tables/screening_list_entry.sql"
+run "/repo/baseline/tables/alert.sql"
+run "/repo/baseline/tables/alert_comment.sql"
+run "/repo/baseline/tables/alert_status_history.sql"
 
 echo "--- 2b. Functions ---"
-run "/repo/baseline/functions/p_name function.sql"
-run "/repo/baseline/functions/p_tax function.sql"
-run "/repo/baseline/functions/p_calculate_similarity function.sql"
-run "/repo/baseline/functions/search_by_tax_id function.sql"
-run "/repo/baseline/functions/log_alert_status_change SQL.sql"
+run "/repo/baseline/functions/p_name.sql"
+run "/repo/baseline/functions/p_tax.sql"
+run "/repo/baseline/functions/p_calculate_similarity.sql"
+run "/repo/baseline/functions/search_by_tax_id.sql"
+run "/repo/baseline/functions/log_alert_status_change.sql"
 
 echo "--- 2c. Triggers ---"
-run "/repo/baseline/trigger_alert_status_history.sql"
+run "/repo/baseline/triggers/alert_status_history.sql"
 
 echo "--- 2d. Views ---"
-run "/repo/baseline/views/view alert_aging.sql"
-run "/repo/baseline/views/view pending_alerts_by_analyst.sql"
-run "/repo/baseline/views/view analyst_productivity.sql"
-run "/repo/baseline/views/view screening_metrics.sql"
-run "/repo/baseline/views/view screening_coverage.sql"
+run "/repo/baseline/views/alert_aging.sql"
+run "/repo/baseline/views/pending_alerts_by_analyst.sql"
+run "/repo/baseline/views/analyst_productivity.sql"
+run "/repo/baseline/views/screening_metrics.sql"
+run "/repo/baseline/views/screening_coverage.sql"
 
 # -----------------------------------------------------------------------------
 # 3. Migraciones V001..V010 en orden. Excluimos V000 (ya corrió en paso 1).

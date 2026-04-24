@@ -147,11 +147,14 @@ erDiagram
 │       └── test_V010__...sql
 ├── seeds/
 │   └── seed_data.sql               # Dataset de demo
-├── SQL Tables/                     # DDL baseline (tables)
-├── SQL Functions/                  # DDL baseline (functions)
-├── SQL Views/                      # Dashboards (aging, productivity, etc.)
-├── SQL Inserts/                    # Inserts originales (ya incorporados a seeds/)
-├── trigger alert_status_history.sql
+├── baseline/                       # DDL inicial (pre-migraciones)
+│   ├── tables/                     # 10 tablas del schema base
+│   ├── functions/                  # 5 funciones (similarity, tax_id, etc.)
+│   ├── triggers/                   # Triggers de auditoría (status history)
+│   └── views/                      # 5 dashboards (aging, productivity, etc.)
+├── docs/
+│   └── legacy/
+│       └── inserts/                # Inserts originales (reemplazados por seeds/)
 └── README.md
 ```
 

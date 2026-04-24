@@ -39,12 +39,11 @@ services:
     volumes:
       # Persistencia de datos (named volume gestionado por docker).
       - complif_pg_data:/var/lib/postgresql/data
-      # Bind mounts read-only de los archivos del repo. El init los consume
-      # desde estas rutas dentro del container.
-      - ./SQL Tables:/repo/baseline/tables:ro
-      - ./SQL Functions:/repo/baseline/functions:ro
-      - ./SQL Views:/repo/baseline/views:ro
-      - ./trigger alert_status_history.sql:/repo/baseline/trigger_alert_status_history.sql:ro
+      # Bind mount único del DDL baseline (tables/functions/triggers/views
+      # ya están organizados por subcarpeta). Post-refactor de nombres:
+      # antes había tres mounts separados a "SQL Tables/", "SQL Functions/",
+      # "SQL Views/" + un archivo suelto para el trigger.
+      - ./baseline:/repo/baseline:ro
       - ./migrations:/repo/migrations:ro
       - ./seeds:/repo/seeds:ro
       # Script de init: postgres corre TODO lo que esté en esta carpeta
