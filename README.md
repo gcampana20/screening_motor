@@ -29,13 +29,296 @@ SELECT * FROM public.run_screening(
     NULL                                            -- contra todas las listas
 );
 
-# 5. Bajar (mantiene data) o reset limpio (borra volumen)
+# 5. (opcional) Correr el tour guiado completo en una sola pasada
+docker compose exec db psql -U complif_admin -d complif -f /repo/demo/tour.sql
+
+# 6. Bajar (mantiene data) o reset limpio (borra volumen)
 docker compose down
 docker compose down -v
 ```
 
 **Credenciales default (solo dev):** `complif_admin` / `complif_dev_insecure`.
-Puerto expuesto: `5432`.
+Puerto expuesto en el host: `5433` (mapea al `5432` interno del container;
+el 5433 evita conflictos con un Postgres local típico de Windows/macOS que
+suele ocupar el 5432).
+
+**Siguientes pasos recomendados:**
+
+1. Leer la sección [Cómo fluye la data en producción](#cómo-fluye-la-data-en-producción) para entender de dónde sale cada pieza del dataset.
+2. Seguir el [Tour guiado (10 minutos)](#tour-guiado-10-minutos) para ver el motor en acción con queries comentadas.
+3. (Opcional) Conectar un [cliente GUI](#conexión-con-cliente-gui-opcional) como DBeaver si preferís explorar con interfaz gráfica.
+
+---
+
+## Cómo fluye la data en producción
+
+El repo viene con seeds pre-cargados para que el tour funcione sin setup
+adicional, pero es útil entender **de dónde saldría cada tabla en un
+deployment real de Complif**. El motor tiene cuatro "entradas" de data
+distintas, cada una con su propio flujo:
+
+### Onboarding del tenant
+
+Un tenant (ej: "Banco Galicia") se da de alta cuando Complif lo contrata
+como cliente. Operación manual o via panel de admin de Complif — pocas
+por año, no es un flujo automatizado. En el momento del alta se crean el
+`tenant` y sus `analyst` iniciales (los compliance officers del banco que
+usarán la plataforma).
+
+### Master data del cliente (`person` / `company` / `account`)
+
+Estos son los clientes del banco (los usuarios finales). Se populan por
+**integración API** con el core system del tenant: cada vez que el banco
+onboardea un nuevo usuario, su sistema dispara un `POST /persons` (o
+`/companies`) contra la API de Complif pasando los datos. Complif recibe
+y persiste. Para migraciones masivas o carga inicial: bulk upload de CSV
+via UI de admin, o SFTP drop con un ETL detrás.
+
+En este repo no hay capa de API — los seeds los insertan directamente.
+Pero el ciclo de vida conceptual es: onboarding del usuario en el
+tenant → API call → fila en `person`/`company` → disponible para
+screening.
+
+### Listas de screening: dos fuentes distintas
+
+| Tipo de lista | Fuente | Quién la mantiene |
+|---|---|---|
+| `SANCTIONS` (OFAC SDN, UN Consolidated) | Publicaciones oficiales (OFAC saca feeds diarios en XML/CSV, UN publica su Consolidated List) | **Complif centralmente** — cron/worker sincroniza diario o por webhook cuando hay update. Fila en `list` con `tenant_id=NULL` + entries en `screening_list_entry`. |
+| `PEP` | Proveedores comerciales (Dow Jones Risk Center, Refinitiv World-Check, ComplyAdvantage) | **Complif** — subscripción paga, sincronización vía API del proveedor. `tenant_id=NULL`. |
+| `ADVERSE_MEDIA` | Scrapers de prensa + feeds de riesgo reputacional comprados | **Complif** — pipelines de scraping/ETL. `tenant_id=NULL`. |
+| `INTERNAL_BLACKLIST` / `INTERNAL_WATCHLIST` | El propio tenant | **El cliente**, vía UI de admin de Complif o API. Cada fila con su `tenant_id` y visible solo para ese tenant. Caso típico: ex-clientes fraudulentos, personas bloqueadas por riesgo reputacional interno. |
+
+Las listas globales son el valor agregado de Complif: mantener OFAC
+fresco (falso negativo = multa regulatoria para el banco) y PEP curado
+requiere inversión continua que un banco individual no querría replicar.
+
+### Ejecución del screening (`alert`, `screening_run_log`)
+
+Tres triggers posibles para que corra `run_screening`:
+
+- **On-demand / onboarding**: el core system del banco llama al disparar
+  el alta de un cliente nuevo. Latencia baja — el banco espera el
+  resultado para continuar el flujo de KYC. Genera `alert` si hay match.
+- **Batch**: `run_batch_screening` procesa todas las entidades de un
+  tenant (o un subset), útil para cargas iniciales tras onboardear un
+  tenant nuevo con millones de clientes históricos. Cada invocación
+  registra una fila en `screening_run_log`.
+- **Ongoing monitoring**: `run_ongoing_screening` re-screenea entidades
+  cuyas listas se actualizaron desde el último check. Típicamente cron
+  diario o por-webhook cuando OFAC publica update. La vista
+  `vw_entities_pending_screening` alimenta este loop.
+
+Cuando un screening supera el umbral de `list.min_similarity` (o el
+default de `list_type_config`), se crea una fila en `alert` con status
+`PENDING`. El `detail jsonb` guarda el breakdown completo para que el
+analista después entienda por qué se disparó.
+
+### Workflow del analista (`alert_comment`, `alert_status_history`)
+
+Las alertas pendientes aparecen en el dashboard del compliance officer
+del tenant (alimentado por `vw_alert_aging`, `vw_pending_alerts_by_analyst`).
+El analista:
+
+1. Se asigna una alerta (`UPDATE alert SET analyst_id = ..., status = 'REVIEWING'`).
+2. Investiga y escribe notas (`INSERT INTO alert_comment`).
+3. Resuelve: `CONFIRMED` (es el sancionado, bloquea operación), `DISMISSED`
+   (falso positivo, libera al cliente), o deja `REVIEWING` si necesita
+   más información.
+
+Cada cambio de `alert.status` dispara el trigger `log_alert_status_change`
+que inserta una fila en `alert_status_history` — audit trail inmutable
+para auditoría regulatoria ("¿quién aprobó esta operación y cuándo?").
+
+### Resumen visual del ciclo
+
+```
+┌──────────────┐     onboarding
+│   Complif    │────────────────────> tenant, analyst
+│   (admin)    │                      (bajo volumen, manual)
+└──────┬───────┘
+       │ ETL diario desde OFAC/UN/Dow Jones
+       ▼
+┌────────────────────────┐
+│  list (tenant_id NULL) │  +  screening_list_entry
+│  SANCTIONS, PEP,       │
+│  ADVERSE_MEDIA         │
+└────────────────────────┘
+                                ┌──────────────┐
+                                │   Tenant     │ (el banco/fintech)
+                                │   (cliente   │
+                                │    Complif)  │
+                                └──────┬───────┘
+                                       │ API calls al onboardear sus clientes
+                                       ▼
+                                 person, company, account
+                                       │
+                                       │ (disparo de screening: on-demand,
+                                       │  batch, u ongoing)
+                                       ▼
+                                 run_screening()
+                                       │
+                                       │ (si supera umbral)
+                                       ▼
+                                  alert (PENDING)
+                                       │
+                                       │ analista revisa,
+                                       │ asigna, comenta, resuelve
+                                       ▼
+                         alert_comment, alert_status_history
+                         (status: REVIEWING → CONFIRMED/DISMISSED)
+```
+
+---
+
+## Tour guiado (10 minutos)
+
+8 pasos que muestran el motor end-to-end sin tener que leer código. Cada
+paso con query + qué esperar + qué concepto demuestra.
+
+Para correr **todo el tour de un tirón**:
+
+```bash
+docker compose exec db psql -U complif_admin -d complif -f /repo/demo/tour.sql
+```
+
+Para correrlo **de forma didáctica** (paso a paso leyendo los resultados),
+abrí una sesión psql y copiá/pegá cada paso desde `demo/tour.sql`:
+
+```bash
+docker compose exec db psql -U complif_admin -d complif
+# Dentro del psql:
+\x auto   -- formato vertical automático, mejora lectura de JSON detail
+```
+
+### Paso 1 — Ver tenants
+
+```sql
+SELECT id, name FROM public.tenant ORDER BY name;
+```
+
+Esperás ver 2 filas: Acme (AR) y Globex (LATAM). En producción habría
+decenas o cientos — bancos y fintechs que usan Complif.
+
+### Paso 2 — Contextualizarte como Acme
+
+```sql
+SET app.tenant_id = '10000000-0000-0000-0000-000000000001';
+
+SELECT first_name, last_name, country, tax_id
+FROM public.person ORDER BY last_name;
+```
+
+A partir del `SET`, todas las queries quedan scopeadas por RLS. Ves 3
+personas de Acme (Juan Pérez, María González, Ricardo Fernández —
+Ricardo con tax_id placeholder para ejercitar el edge case del Paso 5).
+
+### Paso 3 — Listas disponibles
+
+```sql
+SELECT name, type, tenant_id FROM public.list ORDER BY tenant_id NULLS FIRST;
+```
+
+4 listas globales (OFAC SDN, UN Consolidated, PEP Global, Adverse Media)
++ 1 interna de Acme. Las globales las mantendría Complif
+centralmente; la interna la carga el propio cliente.
+
+### Paso 4 — Match fuerte: Juan Pérez contra OFAC
+
+```sql
+SELECT * FROM public.run_screening(
+    'PERSON',
+    '30000000-0000-0000-0000-000000000001'::uuid,
+    NULL
+);
+```
+
+Devuelve 1 fila, `similarity_score = 100`, `list_name = "OFAC SDN"`.
+Abrí `match_details` (el JSON) para ver el breakdown:
+`name_similarity`, `tax_id_match`, `birth_date_score`, y los
+`weights_applied`. Los 3 componentes están en su máximo → score total
+100.
+
+### Paso 5 — Match con peso degradado (placeholder tax_id)
+
+```sql
+SELECT * FROM public.run_screening(
+    'PERSON',
+    '30000000-0000-0000-0000-000000000003'::uuid,  -- Ricardo Fernández
+    NULL
+);
+```
+
+Ricardo tiene `tax_id = '99999999999'` (placeholder). Hay una entry en
+UN Consolidated con el mismo placeholder. El match existe (por nombre
+fuzzy) pero el peso del tax_id **colapsa a 0** porque el validador
+detecta `PLACEHOLDER`. En `match_details` vas a ver
+`weights_applied.tax_id = 0` y una razón asociada. Es el detalle de
+diseño más importante del motor: un match entre placeholders no es
+signal de identidad, es signal de data quality basura.
+
+### Paso 6 — Validador de tax_id aislado
+
+```sql
+SELECT * FROM public.validate_tax_id('20-12345678-6', 'AR');  -- VALID
+SELECT * FROM public.validate_tax_id('99999999999', 'AR');    -- PLACEHOLDER
+SELECT * FROM public.validate_tax_id('20-12345678-0', 'AR');  -- INVALID_CHECKSUM
+SELECT * FROM public.validate_tax_id('12345678901', 'FR');    -- UNKNOWN_COUNTRY
+```
+
+La función es reutilizable fuera del screening (un analista verificando
+un doc suelto, por ejemplo). Categoriza en: VALID, INVALID_FORMAT,
+INVALID_CHECKSUM, PLACEHOLDER, SEQUENTIAL, MISSING, TOO_SHORT, TOO_LONG,
+UNKNOWN_COUNTRY.
+
+### Paso 7 — Cambiar tenant: aislamiento RLS en acción
+
+```sql
+SET app.tenant_id = '10000000-0000-0000-0000-000000000002';  -- Globex
+
+SELECT first_name, last_name, country FROM public.person ORDER BY last_name;
+SELECT COUNT(*) FROM public.alert;
+```
+
+Mismo SQL que el Paso 2, **resultados completamente distintos**: ahora
+ves Pedro Muñoz (CL), John Smith (US), João Silva (BR). Los de Acme
+desaparecieron. Las alertas pre-cargadas también: 0 visibles desde
+Globex porque son todas de Acme. Postgres filtra transparente — el
+código de app nunca escribe un `WHERE tenant_id = ...`.
+
+### Paso 8 — Vistas de reporting
+
+```sql
+SET app.tenant_id = '10000000-0000-0000-0000-000000000001';  -- volver a Acme
+
+SELECT * FROM public.vw_alert_aging;
+SELECT * FROM public.vw_pending_alerts_by_analyst;
+SELECT * FROM public.vw_screening_metrics;
+```
+
+Las vistas son el contrato público consumido por el dashboard de
+compliance. Respetan RLS transitivamente.
+
+---
+
+## Conexión con cliente GUI (opcional)
+
+Si preferís explorar la DB con interfaz gráfica en vez de psql, cualquier
+cliente Postgres funciona contra `localhost:5433`.
+
+**DBeaver (gotcha conocido)**: en Windows con timezone local argentina,
+la JVM reporta `America/Buenos_Aires` (nombre legacy) y Postgres 17
+solo acepta `America/Argentina/Buenos_Aires` (nombre IANA actual). La
+conexión falla con `FATAL: invalid value for parameter "TimeZone"`.
+
+Fix más simple (per-conexión, sin tocar instalación):
+
+1. Editar conexión → pestaña **Driver properties**.
+2. Agregar property: `options` = `-c TimeZone=UTC`.
+3. Guardar y reconectar.
+
+Alternativa global: editar `dbeaver.ini` (en el directorio de instalación
+de DBeaver) y agregar `-Duser.timezone=UTC` después de la línea `-vmargs`.
+Reiniciar DBeaver.
 
 ---
 

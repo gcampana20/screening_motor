@@ -1,7 +1,7 @@
 {
   "_comment_setup": "Renombrar este archivo a .mcp.json para activarlo. Claude Code y Claude Desktop lo leen cuando abren esta carpeta. .mcp.example.json queda commiteado, .mcp.json debería ir en .gitignore si guarda credenciales reales.",
 
-  "_comment_usage": "Levantar stack primero: docker compose up -d. El server MCP se conecta a la DB dockerizada via localhost:5432. Reemplazar el admin por complif_readonly si se quiere acceso solo-lectura desde el agente (recomendado).",
+  "_comment_usage": "Levantar stack primero: docker compose up -d. El server MCP se conecta a la DB dockerizada via localhost:5433 (puerto host mapeado al 5432 interno del container). Reemplazar el admin por complif_readonly si se quiere acceso solo-lectura desde el agente (recomendado).",
 
   "mcpServers": {
     "postgres-complif": {
@@ -9,7 +9,7 @@
       "args": [
         "-y",
         "@modelcontextprotocol/server-postgres",
-        "postgresql://complif_admin:complif_dev_insecure@localhost:5432/complif"
+        "postgresql://complif_admin:complif_dev_insecure@localhost:5433/complif"
       ]
     }
   }

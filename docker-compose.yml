@@ -51,6 +51,10 @@ services:
       - ./baseline:/repo/baseline:ro
       - ./migrations:/repo/migrations:ro
       - ./seeds:/repo/seeds:ro
+      # demo/ no se ejecuta en el init (por eso está fuera de init scripts),
+      # pero sí se monta para que el tour guiado se pueda correr on-demand:
+      #   docker compose exec db psql ... -f /repo/demo/tour.sql
+      - ./demo:/repo/demo:ro
       # Script de init: postgres corre TODO lo que esté en esta carpeta
       # (.sh y .sql) en orden alfabético al primer boot.
       - ./docker/init:/docker-entrypoint-initdb.d:ro
