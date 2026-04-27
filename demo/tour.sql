@@ -36,13 +36,51 @@
 
 
 -- ============================================================================
+-- Cambio de rol: pasar de complif_admin (SUPERUSER) a complif_app (NOSUPERUSER)
+-- ============================================================================
+-- IMPORTANTE: los SUPERUSER bypasean RLS por definición de Postgres, aunque
+-- las tablas tengan FORCE ROW LEVEL SECURITY. Sin este SET ROLE, los SELECTs
+-- del tour devolverían filas de TODOS los tenants, anulando la demo.
+--
+-- complif_app se crea en V011 con NOSUPERUSER + NOBYPASSRLS, así que las
+-- policies de V004 sí se aplican. El SET ROLE es válido porque complif_admin
+-- (rol de sesión) es superuser y puede asumir cualquier rol.
+--
+-- El cambio dura toda la sesión del script. Si corrés interactivo y querés
+-- volver a admin: RESET ROLE;
+SET ROLE complif_app;
+
+\echo ''
+\echo '── Rol activo durante el tour:'
+SELECT current_user AS rol_efectivo,
+       session_user AS rol_de_sesion,
+       current_setting('is_superuser') AS es_superuser;
+
+
+-- ============================================================================
+-- Convención de tenant context a lo largo del tour
+-- ============================================================================
+-- PASO 1 .......... sin tenant context (lista tenants — tabla SIN RLS).
+-- PASO 2 .......... SET app.tenant_id = Acme  → contexto Acme en pasos 2-6.
+-- PASO 3-5 ........ heredan el contexto Acme del paso 2.
+-- PASO 6 .......... validate_tax_id es función pura, no depende de tenant.
+-- PASO 7 .......... SET app.tenant_id = Globex (switch para demostrar RLS).
+-- PASO 8 .......... SET app.tenant_id = Acme (volvemos a Acme para reporting).
+--
+-- Cada vez que cambia el contexto, el tour imprime "── Tenant activo: …"
+-- abajo del SET para que sea visualmente claro desde qué tenant se consulta.
+
+
+-- ============================================================================
 -- PASO 1 — Ver los tenants disponibles
 -- ============================================================================
 \echo ''
 \echo '╔════════════════════════════════════════════════════════════════════╗'
-\echo '║ PASO 1 — Tenants registrados                                       ║'
+\echo '║ PASO 1 — Tenants registrados (catálogo SIN RLS)                    ║'
 \echo '║ Cada tenant = un cliente de Complif (banco, fintech).              ║'
 \echo '║ En prod habría decenas; en los seeds hay 2 (Acme, Globex).         ║'
+\echo '║ Nota: este SELECT funciona sin SET app.tenant_id porque la tabla   ║'
+\echo '║ tenant queda intencionalmente fuera de RLS (es un catálogo).       ║'
 \echo '╚════════════════════════════════════════════════════════════════════╝'
 
 SELECT id, name FROM public.tenant ORDER BY name;
@@ -61,6 +99,13 @@ SELECT id, name FROM public.tenant ORDER BY name;
 \echo '╚════════════════════════════════════════════════════════════════════╝'
 
 SET app.tenant_id = '10000000-0000-0000-0000-000000000001';
+
+\echo ''
+\echo '── Tenant activo:'
+SELECT COALESCE(
+    (SELECT name FROM public.tenant WHERE id = public.current_tenant_id()),
+    '(sin contexto)'
+) AS tenant_activo;
 
 SELECT first_name, last_name, country, tax_id
 FROM public.person
@@ -97,7 +142,14 @@ ORDER BY tenant_id NULLS FIRST, name;
 \echo '║ birth_date=1, weights.total=1.0 → match exacto en todo.            ║'
 \echo '╚════════════════════════════════════════════════════════════════════╝'
 
-SELECT *
+-- jsonb_pretty hace que el JSON salga multi-línea y legible en lugar de una
+-- sola fila kilométrica. Las otras columnas las explicitamos para mantener
+-- el orden estable.
+SELECT alert_id,
+       list_name,
+       matched_entry_id,
+       similarity_score,
+       jsonb_pretty(match_details) AS match_details
 FROM public.run_screening(
     'PERSON',
     '30000000-0000-0000-0000-000000000001'::uuid,
@@ -118,7 +170,11 @@ FROM public.run_screening(
 \echo '║ Mirá en match_details: weights_applied.tax_id = 0.                 ║'
 \echo '╚════════════════════════════════════════════════════════════════════╝'
 
-SELECT *
+SELECT alert_id,
+       list_name,
+       matched_entry_id,
+       similarity_score,
+       jsonb_pretty(match_details) AS match_details
 FROM public.run_screening(
     'PERSON',
     '30000000-0000-0000-0000-000000000003'::uuid,
@@ -131,26 +187,36 @@ FROM public.run_screening(
 -- ============================================================================
 \echo ''
 \echo '╔════════════════════════════════════════════════════════════════════╗'
-\echo '║ PASO 6 — validate_tax_id con 4 categorías distintas                ║'
-\echo '║ La función es reutilizable fuera del screening: un officer         ║'
-\echo '║ verificando un doc suelto, por ejemplo.                            ║'
+\echo '║ PASO 6 — validate_tax_id: las 4 categorías side-by-side            ║'
+\echo '║ La función es reutilizable fuera del screening (ej: un officer     ║'
+\echo '║ verificando un doc suelto). En vez de mirar 4 JSONs separados,     ║'
+\echo '║ comparamos las 4 categorías en una sola tabla:                     ║'
+\echo '║   6a VALID            — CUIT con checksum correcto.                ║'
+\echo '║   6b PLACEHOLDER      — formato OK pero todos los dígitos iguales. ║'
+\echo '║   6c INVALID_CHECKSUM — formato OK, checksum mod-11 falla.         ║'
+\echo '║   6d UNKNOWN_COUNTRY  — país sin validador implementado (FR).      ║'
+\echo '║ Mirá las columnas is_valid / is_suspicious / reasons para ver      ║'
+\echo '║ cómo la función diferencia cada caso.                              ║'
 \echo '╚════════════════════════════════════════════════════════════════════╝'
 
-\echo ''
-\echo '--- 6a) CUIT argentino VÁLIDO ---'
-SELECT * FROM public.validate_tax_id('20-12345678-6', 'AR');
-
-\echo ''
-\echo '--- 6b) PLACEHOLDER detectado (todos iguales) ---'
-SELECT * FROM public.validate_tax_id('99999999999', 'AR');
-
-\echo ''
-\echo '--- 6c) CHECKSUM mod-11 INVÁLIDO ---'
-SELECT * FROM public.validate_tax_id('20-12345678-0', 'AR');
-
-\echo ''
-\echo '--- 6d) País SIN VALIDACIÓN implementada (Francia) ---'
-SELECT * FROM public.validate_tax_id('12345678901', 'FR');
+-- Una sola query que extrae las columnas clave del JSON que devuelve
+-- validate_tax_id, para que las 4 categorías queden alineadas en filas
+-- comparables. Si la fila es más ancha que la terminal, \x auto la pasa a
+-- formato vertical (RECORD 1..4) y sigue siendo legible.
+SELECT
+    caso,
+    j->>'category'                   AS category,
+    j->>'doc_type'                   AS doc_type,
+    j->>'normalized'                 AS normalized,
+    (j->>'is_valid')::boolean        AS is_valid,
+    (j->>'is_suspicious')::boolean   AS is_suspicious,
+    j->'reasons'                     AS reasons
+FROM (VALUES
+    ('6a · CUIT VÁLIDO',         public.validate_tax_id('20-12345678-6', 'AR')),
+    ('6b · PLACEHOLDER',         public.validate_tax_id('99999999999',   'AR')),
+    ('6c · CHECKSUM INVÁLIDO',   public.validate_tax_id('20-12345678-0', 'AR')),
+    ('6d · UNKNOWN_COUNTRY (FR)', public.validate_tax_id('12345678901',   'FR'))
+) AS t(caso, j);
 
 
 -- ============================================================================
@@ -165,6 +231,13 @@ SELECT * FROM public.validate_tax_id('12345678901', 'FR');
 \echo '╚════════════════════════════════════════════════════════════════════╝'
 
 SET app.tenant_id = '10000000-0000-0000-0000-000000000002';
+
+\echo ''
+\echo '── Tenant activo:'
+SELECT COALESCE(
+    (SELECT name FROM public.tenant WHERE id = public.current_tenant_id()),
+    '(sin contexto)'
+) AS tenant_activo;
 
 \echo ''
 \echo '--- 7a) Personas visibles desde Globex ---'
@@ -185,6 +258,13 @@ SELECT COUNT(*) AS alerts_visibles FROM public.alert;
 \echo '╚════════════════════════════════════════════════════════════════════╝'
 
 SET app.tenant_id = '10000000-0000-0000-0000-000000000001';
+
+\echo ''
+\echo '── Tenant activo:'
+SELECT COALESCE(
+    (SELECT name FROM public.tenant WHERE id = public.current_tenant_id()),
+    '(sin contexto)'
+) AS tenant_activo;
 
 \echo ''
 \echo '--- 8a) Aging de alertas pendientes ---'

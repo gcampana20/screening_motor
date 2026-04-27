@@ -37,7 +37,13 @@ docker compose down
 docker compose down -v
 ```
 
-**Credenciales default (solo dev):** `complif_admin` / `complif_dev_insecure`.
+**Credenciales default (solo dev):**
+
+| Rol | Password | Cuándo usarlo |
+|---|---|---|
+| `complif_admin` | `complif_dev_insecure` | Migraciones, seeds, tareas administrativas. Es **SUPERUSER y bypasea RLS** — útil para admin pero no para demostrar el aislamiento multi-tenant. |
+| `complif_app` | `complif_app_dev` | El que usa la app/tour en runtime. **NOSUPERUSER + NOBYPASSRLS** → las policies de V004 sí se aplican. Creado por la migration V011. |
+
 Puerto expuesto en el host: `5433` (mapea al `5432` interno del container;
 el 5433 evita conflictos con un Postgres local típico de Windows/macOS que
 suele ocupar el 5432).
@@ -482,6 +488,13 @@ JOIN con `list`. Razón: las listas globales (OFAC) son compartidas por
 todos los tenants, y duplicar cada entry por tenant escala mal (25k entries
 × N tenants).
 
+> ⚠️ **Importante:** los SUPERUSER **bypasean RLS por definición de Postgres**,
+> aunque la tabla tenga `FORCE ROW LEVEL SECURITY`. Por eso V011 crea el rol
+> `complif_app` (NOSUPERUSER + NOBYPASSRLS): el motor solo demuestra
+> aislamiento real cuando la sesión usa ese rol. El tour ejecuta
+> `SET ROLE complif_app;` al inicio. Si te conectás como `complif_admin` y
+> ves filas cross-tenant, **es esto** — no un bug en las policies.
+
 ### 2. Similarity ponderada con pesos degradables
 
 El score final = promedio ponderado de 3 componentes, normalizado:
@@ -580,6 +593,7 @@ WHERE detail->'tax_id_validation'->'input'->>'category' = 'INVALID_CHECKSUM';
 | V008 | `tax_id_validation` | Validador country-aware; extiende `search_by_tax_id`; suma `p_country` a `calculate_similarity` | Detección de placeholders + identidad real |
 | V009 | `run_screening_country_aware_validation` | `calculate_similarity` con DOS países (entity + entry); `run_screening` propaga ambos | Fix de validación cross-jurisdiction |
 | V010 | `security_definer_and_minor_fixes` | SECURITY DEFINER + `search_path` en run_screening*; `alert_status_check`; `alert.detail` → jsonb + GIN | Seguridad + quality fixes |
+| V011 | `app_role` | Crea rol `complif_app` NOSUPERUSER + NOBYPASSRLS con DML/EXECUTE | Sin esto, RLS se bypasea porque `complif_admin` es SUPERUSER |
 
 ---
 

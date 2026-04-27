@@ -10,7 +10,7 @@
 --
 -- Contrato con la aplicación:
 --   Al iniciar cada request (después de autenticar al usuario), la app ejecuta:
---       SET LOCAL app.current_tenant = '<uuid-del-tenant>';
+--       SET LOCAL app.tenant_id = '<uuid-del-tenant>';
 --   A partir de ese momento, cualquier query del backend solo ve filas del
 --   tenant correspondiente. Si la variable no está seteada, fail-closed:
 --   el usuario no ve nada (0 filas), no hay error.
@@ -41,8 +41,11 @@
 --        alert_status_history            (hereda visibilidad de alert)
 --      → Policy: EXISTS (SELECT 1 FROM parent WHERE ...)
 --
---   D) Sin RLS: tenant (catálogo de tenants, solo admin accede),
---      tablas de sistema, etc. — no se tocan en esta migration.
+--   D) Sin RLS: tenant (catálogo de tenants — todos los roles ven todas
+--                las filas; el aislamiento se hace por las tablas que
+--                referencian tenant.id, no por el catálogo en sí).
+--                Si alguna vez se restringe, sería con un rol "admin app"
+--                separado, no con RLS por tenant_id.
 --
 -- Idempotencia:
 --   ALTER TABLE ... ENABLE/FORCE ROW LEVEL SECURITY es idempotente.
@@ -55,7 +58,7 @@ BEGIN;
 -- -----------------------------------------------------------------------------
 -- 1. Helper: current_tenant_id()
 -- -----------------------------------------------------------------------------
--- Lee app.current_tenant de la sesión. Devuelve NULL si no está seteada
+-- Lee app.tenant_id de la sesión. Devuelve NULL si no está seteada
 -- (o si es string vacío), gracias al segundo arg `true` de current_setting
 -- que activa "missing_ok" y al NULLIF.
 --
@@ -66,12 +69,12 @@ RETURNS uuid
 LANGUAGE sql
 STABLE
 AS $$
-    SELECT NULLIF(current_setting('app.current_tenant', true), '')::uuid;
+    SELECT NULLIF(current_setting('app.tenant_id', true), '')::uuid;
 $$;
 
 COMMENT ON FUNCTION public.current_tenant_id() IS
-    'Devuelve el tenant_id de la sesión actual (app.current_tenant) o NULL. '
-    'La app debe setear SET LOCAL app.current_tenant = ''<uuid>'' al iniciar '
+    'Devuelve el tenant_id de la sesión actual (app.tenant_id) o NULL. '
+    'La app debe setear SET LOCAL app.tenant_id = ''<uuid>'' al iniciar '
     'cada request. Usada por las policies de RLS.';
 
 -- -----------------------------------------------------------------------------
@@ -194,5 +197,18 @@ CREATE POLICY ash_tenant_isolation ON public.alert_status_history
               AND a.tenant_id = public.current_tenant_id()
         )
     );
+
+-- -----------------------------------------------------------------------------
+-- 5. Tenant catalog — RLS explícitamente DESHABILITADA
+-- -----------------------------------------------------------------------------
+-- El baseline (exportado desde pgAdmin) viene con ENABLE ROW LEVEL SECURITY
+-- en `tenant`, pero NO le creamos policies acá. Si dejáramos eso así, el
+-- default de Postgres es "deny todo" para no-superusers → la app no podría
+-- ni listar tenants, lo que rompe casos básicos como un dropdown de selección.
+--
+-- Disable explícito acá deja claro que es decisión consciente: el catálogo
+-- es público para cualquier rol con SELECT. El aislamiento real está en las
+-- tablas que referencian tenant.id (person, alert, etc.), no en el catálogo.
+ALTER TABLE public.tenant DISABLE ROW LEVEL SECURITY;
 
 COMMIT;
